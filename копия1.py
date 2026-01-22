@@ -399,7 +399,61 @@ def create_clicker_keyboard():
     if row:
         markup.row(*row)
     return markup
-
+@bot.message_handler(func=lambda message: message.text == '/debug_images' and is_admin(message.from_user.id))
+def debug_images(message):
+    """Показать информацию о файлах и путях"""
+    import glob
+    
+    current_dir = os.getcwd()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    response = "📁 Диагностика файлов:\n\n"
+    response += f"📂 Текущая директория: {current_dir}\n"
+    response += f"📂 Директория скрипта: {script_dir}\n\n"
+    
+    # Список всех файлов в текущей директории
+    response += "📋 Содержимое текущей директории:\n"
+    files = os.listdir('.')
+    for file in sorted(files)[:20]:  # Первые 20 файлов
+        if os.path.isfile(file):
+            response += f"📄 {file}\n"
+        else:
+            response += f"📁 {file}/\n"
+    
+    # Ищем изображения рулетки
+    response += "\n🔍 Поиск изображений рулетки:\n"
+    
+    # Проверяем разные форматы
+    formats = ['png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG']
+    numbers = list(range(37))  # 0-36
+    
+    found_images = []
+    for number in numbers:
+        for ext in formats:
+            # Проверяем в разных местах
+            possible_paths = [
+                f"{number}.{ext}",
+                f"./{number}.{ext}",
+                f"/app/{number}.{ext}",
+                os.path.join(current_dir, f"{number}.{ext}"),
+                os.path.join(script_dir, f"{number}.{ext}"),
+            ]
+            
+            for path in possible_paths:
+                if os.path.exists(path):
+                    found_images.append((number, path))
+                    break
+    
+    if found_images:
+        response += f"✅ Найдено {len(found_images)} изображений:\n"
+        for number, path in sorted(found_images)[:10]:  # Первые 10
+            response += f"  {number}: {path}\n"
+        if len(found_images) > 10:
+            response += f"  ... и еще {len(found_images) - 10}\n"
+    else:
+        response += "❌ Изображения не найдены!\n"
+    
+    bot.send_message(message.chat.id, response)
 
 # Главное меню (компактный вариант)
 def create_main_menu():
