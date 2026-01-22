@@ -693,7 +693,437 @@ def handle_majors(message):
         logging.error(f"Ошибка в handle_majors: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка загрузки топа. Попробуйте снова.")
 # =============== КОНЕЦ ОБРАБОТЧИКА ===============
+# === ПРОСТАЯ ИГРА ОРЁЛ И РЕШКА ===
 
+# Словарь для хранения стикеров
+COIN_STICKERS = [
+    "CAACAgIAAxkBAAELdU9mVgVXQ5OgVpVWj8MkeHeJg2NjKQACFxoAAjyqUEo-9fYIQocKfjQE",  # 🦅 орел
+    "CAACAgIAAxkBAAELdVFmVgYqPD_8ylN6HGTmDyw-ZiQrdAACKBoAAjyqUEqIgHksRroO7DQE",  # 🍌 решка
+    "CAACAgIAAxkBAAELdVNmVgbcPrPlfSDcJ2IZcDk_3uwQ1AACJBoAAjyqUEpmd5XoMq2I6TQE",  # 🪙 решка 2
+    "CAACAgIAAxkBAAELdVdmVgcKfOYotk1C_pkcnV2UqZ9OngACJRoAAjyqUEoM3O2bIeU4dDQE"   # 🦅 орел 2
+]
+
+# Глобальные переменные для игры
+pending_coin_bets = {}  # {message_id: {'creator_id': id, 'bet': amount, 'side': 'решка', 'target_id': replied_to_id}}
+
+@bot.message_handler(func=lambda message: message.text.lower().startswith('решка') and message.reply_to_message)
+def handle_coin_bet(message):
+    """Игра Орёл и Решка через ответ на сообщение"""
+    try:
+        if is_spam(message.from_user.id):
+            return
+            
+        # Проверяем бан
+        banned, reason = is_banned(message.from_user.id)
+        if banned:
+            bot.send_message(message.chat.id, f"🚫 Вы забанены!\nПричина: {reason}")
+            return
+            
+        user_id = message.from_user.id
+        username = message.from_user.username or message.from_user.first_name
+        
+        # Проверяем не отвечает ли на самого себя
+        target_user = message.reply_to_message.from_user
+        target_id = target_user.id
+        
+        if target_id == user_id:
+            bot.send_message(message.chat.id, "❌ Нельзя играть против самого себя!")
+            return
+        
+        # Проверяем баланс пользователя
+        balance = get_balance(user_id)
+        
+        # Парсим ставку
+        parts = message.text.lower().split()
+        if len(parts) < 2:
+            bot.send_message(message.chat.id, "❌ Формат: решка [ставка]\nПример: решка 1000к")
+            return
+        
+        bet_amount = parse_bet_amount(' '.join(parts[1:]), balance)
+        
+        if bet_amount is None:
+            bot.send_message(message.chat.id, "❌ Неверная сумма ставки")
+            return
+        
+        if bet_amount <= 0:
+            bot.send_message(message.chat.id, "❌ Сумма ставки должна быть больше 0")
+            return
+        
+        if bet_amount > balance:
+            bot.send_message(message.chat.id, "❌ Недостаточно средств для ставки")
+            return
+        
+        # Проверяем баланс цели
+        target_balance = get_balance(target_id)
+        if target_balance < bet_amount:
+            bot.send_message(message.chat.id, f"❌ У {target_user.first_name} недостаточно средств!")
+            return
+        
+        # Проверяем не играет ли уже
+        if message.message_id in pending_coin_bets:
+            bot.send_message(message.chat.id, "❌ Эта ставка уже обрабатывается!")
+            return
+        
+        # Создаем ставку
+        pending_coin_bets[message.message_id] = {
+            'creator_id': user_id,
+            'creator_name': username,
+            'bet': bet_amount,
+            'side': 'решка',
+            'target_id': target_id,
+            'target_name': target_user.first_name,
+            'message_id': message.message_id,
+            'chat_id': message.chat.id,
+            'status': 'pending'
+        }
+        
+        # Сразу списываем ставку
+        update_balance(user_id, -bet_amount)
+        
+        # Отправляем предложение игры
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("🦅 ПРИНЯТЬ СТАВКУ", callback_data=f"coin_accept_{message.message_id}"),
+            InlineKeyboardButton("❌ ОТКЛОНИТЬ", callback_data=f"coin_reject_{message.message_id}")
+        )
+        
+        game_text = f"🎲 <b>ВЫЗОВ НА ДУЭЛЬ!</b>\n\n"
+        game_text += f"👤 <b>{username}</b> вызывает <b>{target_user.first_name}</b>\n\n"
+        game_text += f"💰 <b>Ставка:</b> ❄️{format_balance(bet_amount)}\n"
+        game_text += f"🎯 <b>{username}</b> играет за: 🍌 <b>РЕШКУ</b>\n"
+        game_text += f"🎯 <b>{target_user.first_name}</b> играет за: 🦅 <b>ОРЛА</b>\n\n"
+        game_text += f"⏳ <b>У {target_user.first_name} есть 30 секунд чтобы принять вызов!</b>"
+        
+        sent_msg = bot.reply_to(message.reply_to_message, game_text, 
+                               reply_markup=markup, 
+                               parse_mode='HTML')
+        
+        # Сохраняем ID сообщения для обновления
+        pending_coin_bets[message.message_id]['bot_message_id'] = sent_msg.message_id
+        
+        # Автоотмена через 30 секунд
+        threading.Timer(30.0, auto_cancel_coin_bet, args=[message.message_id]).start()
+        
+    except Exception as e:
+        logging.error(f"Ошибка в handle_coin_bet: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка в игре. Попробуйте снова.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('coin_'))
+def coin_game_callback(call):
+    try:
+        if call.data.startswith('coin_accept_'):
+            # Принятие ставки
+            message_id = int(call.data.split('_')[2])
+            
+            if message_id not in pending_coin_bets:
+                bot.answer_callback_query(call.id, "❌ Ставка не найдена или отменена")
+                return
+            
+            bet_data = pending_coin_bets[message_id]
+            
+            # Проверяем что это именно тот пользователь, которому предлагали
+            if call.from_user.id != bet_data['target_id']:
+                bot.answer_callback_query(call.id, "❌ Это не ваша ставка!")
+                return
+            
+            # Проверяем баланс
+            if bet_data['bet'] > get_balance(call.from_user.id):
+                bot.answer_callback_query(call.id, "❌ Недостаточно средств!")
+                return
+            
+            # Списываем ставку у принимающего
+            update_balance(call.from_user.id, -bet_data['bet'])
+            
+            # Обновляем статус
+            bet_data['status'] = 'accepted'
+            
+            # Обновляем сообщение
+            update_text = f"✅ <b>{call.from_user.first_name} принял(а) вызов!</b>\n\n"
+            update_text += f"🎲 <b>Бросаем монету...</b>"
+            
+            bot.edit_message_text(
+                update_text,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML'
+            )
+            
+            bot.answer_callback_query(call.id, "✅ Вы приняли ставку!")
+            
+            # Запускаем игру через 2 секунды
+            threading.Timer(2.0, play_coin_game, args=[message_id]).start()
+            
+        elif call.data.startswith('coin_reject_'):
+            # Отклонение ставки
+            message_id = int(call.data.split('_')[2])
+            
+            if message_id not in pending_coin_bets:
+                bot.answer_callback_query(call.id, "❌ Ставка не найдена")
+                return
+            
+            bet_data = pending_coin_bets[message_id]
+            
+            # Проверяем права
+            if call.from_user.id != bet_data['target_id']:
+                bot.answer_callback_query(call.id, "❌ Это не ваша ставка!")
+                return
+            
+            # Возвращаем деньги создателю
+            update_balance(bet_data['creator_id'], bet_data['bet'])
+            
+            # Обновляем сообщение
+            reject_text = f"❌ <b>{call.from_user.first_name} отклонил(а) вызов</b>\n\n"
+            reject_text += f"💰 {bet_data['creator_name']} вернул ❄️{format_balance(bet_data['bet'])}"
+            
+            bot.edit_message_text(
+                reject_text,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML'
+            )
+            
+            bot.answer_callback_query(call.id, "❌ Вы отклонили ставку")
+            
+            # Удаляем из pending
+            del pending_coin_bets[message_id]
+            
+    except Exception as e:
+        logging.error(f"Ошибка в coin_game_callback: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка")
+
+def play_coin_game(message_id):
+    """Запустить игру с монетой"""
+    if message_id not in pending_coin_bets:
+        return
+    
+    bet_data = pending_coin_bets[message_id]
+    
+    try:
+        # Выбираем случайный стикер из пака
+        sticker_id = random.choice(COIN_STICKERS)
+        
+        # Определяем что выпало по стикеру
+        # Первые два стикера - орлы, вторые два - решки
+        if COIN_STICKERS.index(sticker_id) < 2:
+            coin_result = "орёл"
+            result_emoji = "🦅"
+        else:
+            coin_result = "решка"
+            result_emoji = "🍌"
+        
+        # Отправляем стикер
+        bot.send_sticker(bet_data['chat_id'], sticker_id)
+        
+        # Ждем 1 секунду для драматизма
+        time.sleep(1)
+        
+        # Определяем победителя
+        if coin_result == bet_data['side']:
+            winner_id = bet_data['creator_id']
+            winner_name = bet_data['creator_name']
+            loser_id = bet_data['target_id']
+            loser_name = bet_data['target_name']
+        else:
+            winner_id = bet_data['target_id']
+            winner_name = bet_data['target_name']
+            loser_id = bet_data['creator_id']
+            loser_name = bet_data['creator_name']
+        
+        # Вычисляем выигрыш
+        win_amount = bet_data['bet'] * 2
+        
+        # Начисляем выигрыш победителю
+        update_balance(winner_id, win_amount)
+        
+        # Формируем результат
+        result_text = f"🎲 <b>РЕЗУЛЬТАТ БРОСКА</b>\n\n"
+        result_text += f"✨ <b>Выпало:</b> {result_emoji} <b>{coin_result.upper()}</b>\n\n"
+        
+        result_text += f"👤 <b>Игроки:</b>\n"
+        result_text += f"• {bet_data['creator_name']} → 🍌 <b>РЕШКА</b>\n"
+        result_text += f"• {bet_data['target_name']} → 🦅 <b>ОРЁЛ</b>\n\n"
+        
+        result_text += f"🏆 <b>ПОБЕДИТЕЛЬ:</b> {winner_name}\n"
+        result_text += f"💰 <b>Выигрыш:</b> ❄️{format_balance(win_amount)}\n\n"
+        result_text += f"🎮 <i>Сыграйте еще раз!</i>"
+        
+        # Обновляем сообщение
+        bot.edit_message_text(
+            result_text,
+            bet_data['chat_id'],
+            bet_data['bot_message_id'],
+            parse_mode='HTML'
+        )
+        
+        # Отправляем уведомления
+        try:
+            bot.send_message(winner_id,
+                           f"🏆 <b>ВЫ ВЫИГРАЛИ!</b>\n\n"
+                           f"🎲 Противник: {loser_name}\n"
+                           f"💰 +❄️{format_balance(win_amount)}\n"
+                           f"🎯 Выпало: {result_emoji} {coin_result}",
+                           parse_mode='HTML')
+        except:
+            pass
+            
+        try:
+            bot.send_message(loser_id,
+                           f"❌ <b>ВЫ ПРОИГРАЛИ</b>\n\n"
+                           f"🎲 Противник: {winner_name}\n"
+                           f"💸 -❄️{format_balance(bet_data['bet'])}\n"
+                           f"🎯 Выпало: {result_emoji} {coin_result}",
+                           parse_mode='HTML')
+        except:
+            pass
+        
+    except Exception as e:
+        logging.error(f"Ошибка в play_coin_game: {e}")
+        
+        # В случае ошибки возвращаем деньги обоим
+        update_balance(bet_data['creator_id'], bet_data['bet'])
+        update_balance(bet_data['target_id'], bet_data['bet'])
+        
+        error_text = "❌ <b>Ошибка в игре</b>\n\n"
+        error_text += "Произошла техническая ошибка.\n"
+        error_text += f"Оба игрока получили назад по ❄️{format_balance(bet_data['bet'])}"
+        
+        try:
+            bot.edit_message_text(
+                error_text,
+                bet_data['chat_id'],
+                bet_data['bot_message_id'],
+                parse_mode='HTML'
+            )
+        except:
+            pass
+    
+    finally:
+        # Удаляем из pending
+        if message_id in pending_coin_bets:
+            del pending_coin_bets[message_id]
+
+def auto_cancel_coin_bet(message_id):
+    """Автоматическая отмена ставки через 30 секунд"""
+    if message_id not in pending_coin_bets:
+        return
+    
+    bet_data = pending_coin_bets[message_id]
+    
+    # Возвращаем деньги создателю
+    update_balance(bet_data['creator_id'], bet_data['bet'])
+    
+    # Обновляем сообщение
+    cancel_text = f"⏰ <b>ВРЕМЯ ВЫШЛО!</b>\n\n"
+    cancel_text += f"{bet_data['target_name']} не успел(а) принять вызов.\n"
+    cancel_text += f"💰 {bet_data['creator_name']} вернул ❄️{format_balance(bet_data['bet'])}"
+    
+    try:
+        bot.edit_message_text(
+            cancel_text,
+            bet_data['chat_id'],
+            bet_data['bot_message_id'],
+            parse_mode='HTML'
+        )
+    except:
+        pass
+    
+    # Удаляем из pending
+    if message_id in pending_coin_bets:
+        del pending_coin_bets[message_id]
+
+# Добавьте также команду "орёл" для симметрии
+@bot.message_handler(func=lambda message: message.text.lower().startswith('орёл') and message.reply_to_message)
+@bot.message_handler(func=lambda message: message.text.lower().startswith('орел') and message.reply_to_message)
+def handle_eagle_bet(message):
+    """Игра за орла"""
+    try:
+        if is_spam(message.from_user.id):
+            return
+            
+        banned, reason = is_banned(message.from_user.id)
+        if banned:
+            bot.send_message(message.chat.id, f"🚫 Вы забанены!\nПричина: {reason}")
+            return
+            
+        user_id = message.from_user.id
+        username = message.from_user.username or message.from_user.first_name
+        
+        target_user = message.reply_to_message.from_user
+        target_id = target_user.id
+        
+        if target_id == user_id:
+            bot.send_message(message.chat.id, "❌ Нельзя играть против самого себя!")
+            return
+        
+        balance = get_balance(user_id)
+        
+        parts = message.text.lower().split()
+        if len(parts) < 2:
+            bot.send_message(message.chat.id, "❌ Формат: орёл [ставка]\nПример: орёл 1000к")
+            return
+        
+        bet_amount = parse_bet_amount(' '.join(parts[1:]), balance)
+        
+        if bet_amount is None:
+            bot.send_message(message.chat.id, "❌ Неверная сумма ставки")
+            return
+        
+        if bet_amount <= 0:
+            bot.send_message(message.chat.id, "❌ Сумма ставки должна быть больше 0")
+            return
+        
+        if bet_amount > balance:
+            bot.send_message(message.chat.id, "❌ Недостаточно средств для ставки")
+            return
+        
+        target_balance = get_balance(target_id)
+        if target_balance < bet_amount:
+            bot.send_message(message.chat.id, f"❌ У {target_user.first_name} недостаточно средств!")
+            return
+        
+        if message.message_id in pending_coin_bets:
+            bot.send_message(message.chat.id, "❌ Эта ставка уже обрабатывается!")
+            return
+        
+        # Создаем ставку за орла
+        pending_coin_bets[message.message_id] = {
+            'creator_id': user_id,
+            'creator_name': username,
+            'bet': bet_amount,
+            'side': 'орёл',
+            'target_id': target_id,
+            'target_name': target_user.first_name,
+            'message_id': message.message_id,
+            'chat_id': message.chat.id,
+            'status': 'pending'
+        }
+        
+        update_balance(user_id, -bet_amount)
+        
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("🍌 ПРИНЯТЬ СТАВКУ", callback_data=f"coin_accept_{message.message_id}"),
+            InlineKeyboardButton("❌ ОТКЛОНИТЬ", callback_data=f"coin_reject_{message.message_id}")
+        )
+        
+        game_text = f"🎲 <b>ВЫЗОВ НА ДУЭЛЬ!</b>\n\n"
+        game_text += f"👤 <b>{username}</b> вызывает <b>{target_user.first_name}</b>\n\n"
+        game_text += f"💰 <b>Ставка:</b> ❄️{format_balance(bet_amount)}\n"
+        game_text += f"🎯 <b>{username}</b> играет за: 🦅 <b>ОРЛА</b>\n"
+        game_text += f"🎯 <b>{target_user.first_name}</b> играет за: 🍌 <b>РЕШКУ</b>\n\n"
+        game_text += f"⏳ <b>У {target_user.first_name} есть 30 секунд чтобы принять вызов!</b>"
+        
+        sent_msg = bot.reply_to(message.reply_to_message, game_text, 
+                               reply_markup=markup, 
+                               parse_mode='HTML')
+        
+        pending_coin_bets[message.message_id]['bot_message_id'] = sent_msg.message_id
+        
+        threading.Timer(30.0, auto_cancel_coin_bet, args=[message.message_id]).start()
+        
+    except Exception as e:
+        logging.error(f"Ошибка в handle_eagle_bet: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка в игре. Попробуйте снова.")
 # =============== ФУНКЦИЯ СОЗДАНИЯ СООБЩЕНИЯ ТОПА ===============
 def create_top_message(user_id, page=1):
     """Создает сообщение с топом пользователей"""
