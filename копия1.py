@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import threading
 import logging
 # Замените на свой токен
-BOT_TOKEN = "7885520897:AAGcpzQXNYowvX98YZ04hK3pmZjlV5tT4oQ"
+BOT_TOKEN = "8287060486:AAH0tRlAnM2s4rYXKQRDlIB-XMZOhTcMuyI"
 
 logging.basicConfig(
     level=logging.INFO,
