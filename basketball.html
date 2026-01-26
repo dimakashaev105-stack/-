@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏀 Баскетбол</title>
+    <link rel="stylesheet" href="basketball.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Шапка -->
+        <div class="header">
+            <h1>🏀 БАСКЕТБОЛ</h1>
+            <div class="player">
+                <div id="player-name">Загрузка...</div>
+                <div class="balance">Баланс: <span id="balance">0</span> ❄️</div>
+            </div>
+        </div>
+
+        <!-- Игровое поле -->
+        <div class="game-area">
+            <div class="court">
+                <!-- Корзина -->
+                <div class="hoop" id="hoop">
+                    <div class="ring"></div>
+                    <div class="net"></div>
+                </div>
+                
+                <!-- Мяч -->
+                <div class="ball" id="ball">🏀</div>
+                
+                <!-- Пол -->
+                <div class="floor"></div>
+            </div>
+            
+            <!-- Индикатор силы -->
+            <div class="power-control">
+                <div class="power-label">⚡ СИЛА БРОСКА:</div>
+                <div class="power-bar">
+                    <div class="power-fill" id="power-fill"></div>
+                </div>
+                <div class="power-value" id="power-value">50%</div>
+            </div>
+            
+            <!-- Кнопки -->
+            <div class="controls">
+                <button id="charge-btn" class="btn charge">⚡ ЗАРЯДИТЬ</button>
+                <button id="shoot-btn" class="btn shoot" disabled>🏀 БРОСИТЬ!</button>
+            </div>
+        </div>
+
+        <!-- Статистика -->
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-label">Серия</div>
+                <div id="streak" class="stat-value">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Результат</div>
+                <div id="last-result" class="stat-value">-</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Заработано</div>
+                <div id="earned" class="stat-value">0 ❄️</div>
+            </div>
+        </div>
+
+        <!-- Рекорд дня -->
+        <div class="daily">
+            <h3>🏆 РЕКОРД ДНЯ</h3>
+            <div id="daily-top">Загрузка...</div>
+        </div>
+
+        <!-- Сообщения -->
+        <div id="message" class="message"></div>
+    </div>
+
+    <script src="basketball.js"></script>
+</body>
+</html>
