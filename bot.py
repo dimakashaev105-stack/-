@@ -9,7 +9,7 @@ import threading
 import os
 
 # === НАСТРОЙКИ ===
-BOT_TOKEN = "7885520897:AAGcpzQXNYowvX98YZ04hK3pmZjlV5tT4oQ"  # Ваш токен
+BOT_TOKEN = "8287060486:AAH0tRlAnM2s4rYXKQRDlIB-XMZOhTcMuyI"  # Ваш токен
 ADMIN_IDS = [8139807344, 5255608302]
 
 # ВАШ ДОМЕН С HTTPS (ЗАМЕНИТЕ!)
