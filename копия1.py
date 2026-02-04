@@ -40,17 +40,18 @@ def get_db_connection():
 # === ИСПРАВЛЕННАЯ ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ===
 def init_db():
     """Инициализация базы данных с корректной структурой"""
-    conn = None  # ВАЖНО: инициализируем переменную
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Таблица пользователей (сразу со всеми колонками)
+        # Таблица пользователей
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
             first_name TEXT,
+            nickname TEXT,
             balance INTEGER DEFAULT 0,
             last_click INTEGER DEFAULT 0,
             click_power INTEGER DEFAULT 2,
@@ -75,7 +76,8 @@ def init_db():
             snow_job_total INTEGER DEFAULT 0,
             snow_job_end_time TIMESTAMP,
             snow_territory TEXT,
-            last_bonus INTEGER DEFAULT 0
+            last_bonus INTEGER DEFAULT 0,
+            mining_trees INTEGER DEFAULT 0
         )
         ''')
         
@@ -103,21 +105,100 @@ def init_db():
         )
         ''')
         
-        # === ПРОВЕРЯЕМ И ДОБАВЛЯЕМ КОЛОНКУ nickname ЕСЛИ ЕЁ НЕТ ===
+        # Таблица домов пользователей
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_houses (
+            user_id INTEGER,
+            house_id TEXT,
+            is_current INTEGER DEFAULT 0,
+            purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, house_id),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+        ''')
+        
+        # Таблица реферальных бонусов от выигрышей
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS referral_wins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id INTEGER,
+            referee_id INTEGER,
+            win_amount INTEGER,
+            bonus_amount INTEGER,
+            game_name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (referrer_id) REFERENCES users(user_id) ON DELETE CASCADE,
+            FOREIGN KEY (referee_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+        ''')
+        
+        # Таблица конкурсов
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS contests (
+            contest_id TEXT PRIMARY KEY,
+            channel_id INTEGER,
+            channel_title TEXT,
+            max_participants INTEGER,
+            winners_count INTEGER,
+            prizes_text TEXT,
+            creator_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'active',
+            FOREIGN KEY (creator_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+        ''')
+        
+        # Таблица участников конкурсов
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS contest_participants (
+            contest_id TEXT,
+            user_id INTEGER,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (contest_id, user_id),
+            FOREIGN KEY (contest_id) REFERENCES contests(contest_id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+        ''')
+        
+        # Индексы для производительности
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_banned ON users(is_banned)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_registered_at ON users(registered_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_checks_code ON checks(code)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_checks_created_by ON checks(created_by)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_houses_user ON user_houses(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_houses_current ON user_houses(is_current)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_referral_wins_referrer ON referral_wins(referrer_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_referral_wins_created ON referral_wins(created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_contests_status ON contests(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_contests_creator ON contests(creator_id)')
+        
+        # Проверяем существующие колонки и добавляем отсутствующие
         cursor.execute("PRAGMA table_info(users)")
-        columns = cursor.fetchall()
+        columns = [col[1] for col in cursor.fetchall()]
         
-        # Проверяем есть ли колонка nickname
-        has_nickname = False
-        for col in columns:
-            if col[1] == 'nickname':  # col[1] это имя колонки
-                has_nickname = True
-                break
+        # Добавляем отсутствующие колонки
+        required_columns = [
+            ('nickname', 'TEXT'),
+            ('mining_trees', 'INTEGER DEFAULT 0'),
+            ('last_snow_work', 'TIMESTAMP'),
+            ('snow_cooldown_end', 'TIMESTAMP'),
+            ('current_snow_job', 'TEXT'),
+            ('snow_job_progress', 'INTEGER DEFAULT 0'),
+            ('snow_job_total', 'INTEGER DEFAULT 0'),
+            ('snow_job_end_time', 'TIMESTAMP'),
+            ('snow_territory', 'TEXT'),
+            ('last_bonus', 'INTEGER DEFAULT 0')
+        ]
         
-        # Если нет колонки nickname - добавляем
-        if not has_nickname:
-            cursor.execute("ALTER TABLE users ADD COLUMN nickname TEXT")
-            logging.info("✅ Добавлена колонка nickname в таблицу users")
+        for column_name, column_type in required_columns:
+            if column_name not in columns:
+                try:
+                    cursor.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
+                    logging.info(f"✅ Добавлена колонка {column_name}")
+                except sqlite3.Error as e:
+                    logging.error(f"❌ Ошибка добавления колонки {column_name}: {e}")
         
         conn.commit()
         logging.info("✅ База данных успешно инициализирована")
@@ -136,7 +217,8 @@ def init_db():
     finally:
         if conn:
             conn.close()
-# === КОНЕЦ ИСПРАВЛЕНИЙ ===
+
+
 
 # Функция для проверки прав администратора
 def is_admin(user_id):
@@ -1116,8 +1198,6 @@ def add_referral_win_bonus(user_id, win_amount, game_name):
     except Exception as e:
         logging.error(f"Ошибка бонуса от выигрыша: {e}")
 
-# =============== МИНИМАЛЬНЫЙ СКАМ ===============
-
 @bot.message_handler(func=lambda message: message.text == "👥 Скам")
 def handle_scam(message):
     try:
@@ -1133,56 +1213,76 @@ def handle_scam(message):
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # Проверяем наличие таблицы referral_wins
+        cursor.execute("PRAGMA table_info(referral_wins)")
+        referral_wins_exists = cursor.fetchone()
+        
+        if not referral_wins_exists:
+            # Создаем таблицу если ее нет
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS referral_wins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                referee_id INTEGER,
+                win_amount INTEGER,
+                bonus_amount INTEGER,
+                game_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+            conn.commit()
+        
         cursor.execute('SELECT referral_code FROM users WHERE user_id = ?', (user_id,))
         result = cursor.fetchone()
         
-        if result:
-            ref_code = result[0]
-            
-            # Количество рефералов
-            cursor.execute('SELECT COUNT(*) FROM users WHERE referred_by = ? AND is_banned = 0', (user_id,))
-            ref_count = cursor.fetchone()[0]
-            
-            # Бонусы от выигрышей
-            cursor.execute('''
-                SELECT 
-                    SUM(bonus_amount) as total_bonus,
-                    COUNT(*) as total_wins
-                FROM referral_wins 
-                WHERE referrer_id = ?
-            ''', (user_id,))
-            
-            bonus_stats = cursor.fetchone()
-            total_bonus = bonus_stats[0] or 0
-            total_wins = bonus_stats[1] or 0
-            
-            ref_link = f"https://t.me/{(bot.get_me()).username}?start={ref_code}"
-            
-            # Минималистичное сообщение
-            message_text = f"👥 *Твоя ссылка:*\n{ref_link}\n\n"
-            message_text += f"📊 *Статистика:*\n"
-            message_text += f"• Рефералов: {ref_count}\n"
-            message_text += f"• Бонусы от игр: {format_balance(total_bonus)}❄️\n"
-            message_text += f"• Выигрышей: {total_wins}\n\n"
-            message_text += f"💡 *+3% от ВСЕХ выигрышей рефералов*"
-            
-            # Простая кнопка
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("🔄", callback_data="refresh_scam"))
-            
-            bot.send_message(message.chat.id, message_text, parse_mode='Markdown', reply_markup=markup)
-        else:
-            bot.send_message(message.chat.id, "❌ Ошибка")
+        if not result:
+            bot.send_message(message.chat.id, "❌ Реферальный код не найден")
+            conn.close()
+            return
+        
+        ref_code = result[0]
+        
+        # Получаем количество рефералов
+        cursor.execute('SELECT COUNT(*) FROM users WHERE referred_by = ? AND is_banned = 0', (user_id,))
+        ref_count_result = cursor.fetchone()
+        ref_count = ref_count_result[0] if ref_count_result else 0
+        
+        # Получаем статистику бонусов
+        cursor.execute('''
+            SELECT 
+                SUM(bonus_amount) as total_bonus,
+                COUNT(*) as total_wins
+            FROM referral_wins 
+            WHERE referrer_id = ?
+        ''', (user_id,))
+        
+        bonus_stats = cursor.fetchone()
+        total_bonus = bonus_stats[0] if bonus_stats and bonus_stats[0] else 0
+        total_wins = bonus_stats[1] if bonus_stats and bonus_stats[1] else 0
+        
+        ref_link = f"https://t.me/{(bot.get_me()).username}?start={ref_code}"
+        
+        # Формируем сообщение
+        message_text = f"👥 *Твоя ссылка:*\n`{ref_link}`\n\n"
+        message_text += f"📊 *Статистика:*\n"
+        message_text += f"• Рефералов: {ref_count}\n"
+        message_text += f"• Бонусы от игр: {format_balance(total_bonus)}❄️\n"
+        message_text += f"• Выигрышей: {total_wins}\n\n"
+        message_text += f"💡 *+3% от ВСЕХ выигрышей рефералов*"
+        
+        # Кнопка обновления
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔄", callback_data="refresh_scam"))
+        
+        bot.send_message(message.chat.id, message_text, parse_mode='Markdown', reply_markup=markup)
         
         conn.close()
+        
     except Exception as e:
-        bot.send_message(message.chat.id, "❌ Ошибка")
-
-# =============== ПРОСТОЕ ОБНОВЛЕНИЕ ===============
-
+        logging.error(f"Ошибка в handle_scam: {e}")
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)[:50]}")
 @bot.callback_query_handler(func=lambda call: call.data == "refresh_scam")
 def refresh_scam_callback(call):
-    """Простое обновление статистики"""
     try:
         user_id = call.from_user.id
         
@@ -1192,55 +1292,62 @@ def refresh_scam_callback(call):
         cursor.execute('SELECT referral_code FROM users WHERE user_id = ?', (user_id,))
         result = cursor.fetchone()
         
-        if result:
-            ref_code = result[0]
-            
-            cursor.execute('SELECT COUNT(*) FROM users WHERE referred_by = ? AND is_banned = 0', (user_id,))
-            ref_count = cursor.fetchone()[0]
-            
-            cursor.execute('''
-                SELECT 
-                    SUM(bonus_amount) as total_bonus,
-                    COUNT(*) as total_wins
-                FROM referral_wins 
-                WHERE referrer_id = ?
-            ''', (user_id,))
-            
-            bonus_stats = cursor.fetchone()
-            total_bonus = bonus_stats[0] or 0
-            total_wins = bonus_stats[1] or 0
-            
-            ref_link = f"https://t.me/{(bot.get_me()).username}?start={ref_code}"
-            
-            message_text = f"👥 *Твоя ссылка:*\n`{ref_link}`\n\n"
-            message_text += f"📊 *Статистика:*\n"
-            message_text += f"• Рефералов: {ref_count}\n"
-            message_text += f"• Бонусы от игр: {format_balance(total_bonus)}❄️\n"
-            message_text += f"• Выигрышей: {total_wins}\n\n"
-            message_text += f"💡 *+3% от ВСЕХ выигрышей рефералов*"
-            
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("🔄", callback_data="refresh_scam"))
-            
-            try:
-                bot.edit_message_text(
-                    message_text,
-                    call.message.chat.id,
-                    call.message.message_id,
-                    parse_mode='Markdown',
-                    reply_markup=markup
-                )
-            except:
-                pass
-            
-            bot.answer_callback_query(call.id, "✅")
+        if not result:
+            bot.answer_callback_query(call.id, "❌ Ошибка")
+            conn.close()
+            return
+        
+        ref_code = result[0]
+        
+        # Количество рефералов
+        cursor.execute('SELECT COUNT(*) FROM users WHERE referred_by = ? AND is_banned = 0', (user_id,))
+        ref_count_result = cursor.fetchone()
+        ref_count = ref_count_result[0] if ref_count_result else 0
+        
+        # Статистика бонусов
+        cursor.execute('''
+            SELECT 
+                SUM(bonus_amount) as total_bonus,
+                COUNT(*) as total_wins
+            FROM referral_wins 
+            WHERE referrer_id = ?
+        ''', (user_id,))
+        
+        bonus_stats = cursor.fetchone()
+        total_bonus = bonus_stats[0] if bonus_stats and bonus_stats[0] else 0
+        total_wins = bonus_stats[1] if bonus_stats and bonus_stats[1] else 0
+        
+        ref_link = f"https://t.me/{(bot.get_me()).username}?start={ref_code}"
+        
+        # Обновляем сообщение
+        message_text = f"👥 *Твоя ссылка:*\n`{ref_link}`\n\n"
+        message_text += f"📊 *Статистика:*\n"
+        message_text += f"• Рефералов: {ref_count}\n"
+        message_text += f"• Бонусы от игр: {format_balance(total_bonus)}❄️\n"
+        message_text += f"• Выигрышей: {total_wins}\n\n"
+        message_text += f"💡 *+3% от ВСЕХ выигрышей рефералов*"
+        
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔄", callback_data="refresh_scam"))
+        
+        try:
+            bot.edit_message_text(
+                message_text,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='Markdown',
+                reply_markup=markup
+            )
+        except Exception as e:
+            logging.error(f"Ошибка редактирования: {e}")
+        
+        bot.answer_callback_query(call.id, "✅")
         
         conn.close()
         
     except Exception as e:
+        logging.error(f"Ошибка refresh_scam: {e}")
         bot.answer_callback_query(call.id, "❌")
-
-# =============== ФУНКЦИЯ ДЛЯ ИГР ===============
 
 def update_game_with_bonus(user_id, win_amount, game_name):
     """Обновляет баланс и добавляет бонус рефереру"""
@@ -1303,8 +1410,6 @@ def handle_me(message):
             message_text = f"👤 *{first_name}*\n"
             message_text += f"{prestige_id}\n\n"
             
-            if prestige_badge:
-                message_text += f"{prestige_badge}\n\n"
             
             message_text += f"💰 *Баланс:* ❄️{format_balance(balance)}\n"
             
