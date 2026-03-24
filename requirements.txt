@@ -1,3 +1,5 @@
 telethon
 httpx
 flask
+hypercorn
+uvloop
