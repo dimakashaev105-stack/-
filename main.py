@@ -21,15 +21,15 @@ msg_cache = {}
 mimic_mode = False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ВЕБ-СЕРВЕР (Keep-Alive)
+#  KEEP-ALIVE (Для Render)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 app = Flask('')
 @app.route('/')
-def home(): return "SYSTEM ONLINE"
+def home(): return "CORE ONLINE"
 def run_web(): app.run(host='0.0.0.0', port=8080)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ЯДРО ИИ (Groq)
+#  LOGIC
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def ai_call(text, custom_prompt=PROMPT):
     headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
@@ -40,23 +40,20 @@ async def ai_call(text, custom_prompt=PROMPT):
             return resp.json()['choices'][0]['message']['content']
         except: return None
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ОБРАБОТЧИК КОМАНД (Outgoing)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @tg.on(events.NewMessage(outgoing=True))
 async def cmd_handler(event):
-    global mimic_mode
+    global mimic_mode, msg_cache
     raw = event.text.strip().lower()
 
     if raw == "ping":
         start = time.time(); await event.edit("🚀"); ms = round((time.time() - start) * 1000)
-        return await event.edit(f"🛰 **Latency:** `{ms}ms` | **Engine:** Groq")
+        return await event.edit(f"🛰 **Latency:** `{ms}ms`")
 
-    if raw == "мимикрия вкл":
-        mimic_mode = True; return await event.edit("🎭 **Mimicry:** ON")
+    if raw == "мимикрия вкл": mimic_mode = True; return await event.edit("🎭 **Mimicry:** ON")
+    if raw == "мимикрия выкл": mimic_mode = False; return await event.edit("🎭 **Mimicry:** OFF")
     
-    if raw == "мимикрия выкл":
-        mimic_mode = False; return await event.edit("🎭 **Mimicry:** OFF")
+    if raw == "очистить кэш": 
+        msg_cache = {}; return await event.edit("🧹 **Кэш очищен.**")
 
     if raw.startswith("del"):
         await event.delete()
@@ -66,32 +63,26 @@ async def cmd_handler(event):
     if raw.startswith(("ai ", "джарвис ")):
         query = event.text.split(maxsplit=1)[1] if " " in event.text else None
         if not query: return
-        await event.edit("⚡ **Processing...**")
+        await event.edit("⚡ **Analyzing...**")
         ans = await ai_call(query)
         await event.edit(f"🤖 **JARVIS:**\n{ans}" if ans else "❌ Error")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  МОНИТОРИНГ (Incoming & Ghost)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @tg.on(events.NewMessage(incoming=True))
 async def monitor(event):
     global mimic_mode
-    # Кэшируем сообщения для Anti-Delete
     if event.chat_id and event.text:
         msg_cache[event.id] = {'text': event.text, 'sender': event.sender_id}
-        if len(msg_cache) > 500: msg_cache.pop(next(iter(msg_cache)))
+        if len(msg_cache) > 1000: msg_cache.pop(next(iter(msg_cache)))
 
-    # Социальная мимикрия (только ЛС)
     if mimic_mode and event.is_private and not (await event.get_sender()).bot:
         async with tg.action(event.chat_id, 'typing'):
             await asyncio.sleep(len(event.text) * 0.1 + 1)
             ans = await ai_call(event.text, MIMIC_PROMPT)
             if ans: await event.reply(ans.lower())
 
-    # Media Sniper (исчезающие фото)
     if event.media and hasattr(event.media, 'ttl_seconds') and event.media.ttl_seconds:
         file = await event.download_media()
-        await tg.send_file("me", file, caption=f"📸 **Sniper:** Saved self-destructing media from `{event.sender_id}`")
+        await tg.send_file("me", file, caption=f"📸 **Saved Media from:** `{event.sender_id}`")
         os.remove(file)
 
 @tg.on(events.MessageDeleted())
@@ -106,14 +97,11 @@ async def edit_log(event):
     if event.id in msg_cache:
         old = msg_cache[event.id]['text']
         if old != event.text:
-            await tg.send_message("me", f"📝 **Edited:**\n❌ Old: {old}\n✅ New: {event.text}")
+            await tg.send_message("me", f"📝 **Edited:**\n❌ Was: {old}\n✅ Now: {event.text}")
             msg_cache[event.id]['text'] = event.text
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  RUN
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def start():
-    await tg.start(); print("✅ JARVIS ULTIMATE ONLINE"); await tg.run_until_disconnected()
+    await tg.start(); print("✅ ONLINE"); await tg.run_until_disconnected()
 
 if __name__ == '__main__':
     Thread(target=run_web).start()
