@@ -2,6 +2,7 @@ import httpx, asyncio, os, time
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from flask import Flask
+from threading import Thread
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  КОНФИГУРАЦИЯ
@@ -15,26 +16,28 @@ MODEL     = "llama-3.3-70b-versatile"
 JARVIS_PROMPT = "Ты JARVIS — ИИ Тони Старка. Отвечай кратко, саркастично, называй владельца 'сэр'."
 ASSISTANT_PROMPT = "Ты JARVIS, ассистент владельца этого аккаунта. Сразу скажи, что отвечает ИИ, так как владелец занят кодом. Будь вежлив и краток."
 
-# Глобальные переменные
 tg = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
 msg_cache = {}
 ai_memory = {}
 mimic_mode = False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ВЕБ-СЕРВЕР (Для Render)
+#  KEEP-ALIVE (Render)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 app = Flask(__name__)
 @app.route('/')
-def index(): return "JARVIS IS ACTIVE"
+def index(): return "JARVIS CORE ONLINE"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ЛОГИКА ИИ
+#  ЛОГИКА ИИ С ПАМЯТЬЮ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def ai_call(chat_id, text, system_role):
     if chat_id not in ai_memory: ai_memory[chat_id] = []
     ai_memory[chat_id].append({"role": "user", "content": text})
-    if len(ai_memory[chat_id]) > 12: ai_memory[chat_id] = ai_memory[chat_id][-12:]
+    if len(ai_memory[chat_id]) > 10: ai_memory[chat_id] = ai_memory[chat_id][-10:]
 
     headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -52,31 +55,57 @@ async def ai_call(chat_id, text, system_role):
         except: return None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ОБРАБОТЧИКИ
+#  КОМАНДЫ (Исходящие)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @tg.on(events.NewMessage(outgoing=True))
 async def cmd_handler(event):
     global mimic_mode, ai_memory, msg_cache
-    raw = event.text.strip().lower()
+    text = event.text.strip()
+    raw = text.lower()
 
+    # ПИНГ
     if raw == "ping":
         start = time.time(); await event.edit("🚀"); ms = round((time.time() - start) * 1000)
         return await event.edit(f"🛰 **Latency:** `{ms}ms`")
 
+    # УПРАВЛЕНИЕ
     if raw == "мимикрия вкл":
-        mimic_mode = True; return await event.edit("🤖 **Ассистент:** Активирован.")
+        mimic_mode = True; return await event.edit("🤖 **Ассистент:** ВКЛ")
     if raw == "мимикрия выкл":
-        mimic_mode = False; return await event.edit("🤖 **Ассистент:** Выключен.")
+        mimic_mode = False; return await event.edit("🤖 **Ассистент:** ВЫКЛ")
     if raw == "очистить кэш":
-        ai_memory.clear(); msg_cache.clear(); return await event.edit("🧹 **Память очищена.**")
+        ai_memory.clear(); msg_cache.clear(); return await event.edit("🧹 **Память стерта.**")
 
+    # ПОИСК И ОТПРАВКА (Команда: .send @user текст)
+    if raw.startswith((".send ", "отправить ", "напиши ")):
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3: return await event.edit("❌ **Формат: `.send @user текст`**")
+        target, content = parts[1], parts[2]
+        await event.edit(f"🔍 **Поиск {target}...**")
+        try:
+            entity = await tg.get_input_entity(target)
+            await tg.send_message(entity, content)
+            await event.edit(f"🚀 **Отправлено для {target}:**\n{content}")
+        except Exception as e:
+            await event.edit(f"⚠️ **Ошибка:** `{str(e)}`")
+        return
+
+    # ИИ КОМАНДЫ
     if raw.startswith(("ai ", "джарвис ")):
-        query = event.text.split(maxsplit=1)[1] if " " in event.text else None
+        query = text.split(maxsplit=1)[1] if " " in text else None
         if not query: return
         await event.edit("⚡ **Анализ...**")
         ans = await ai_call(event.chat_id, query, JARVIS_PROMPT)
         await event.edit(f"🤖 **JARVIS:**\n{ans}" if ans else "❌ Ошибка Groq.")
 
+    # БЫСТРОЕ УДАЛЕНИЕ
+    if raw == "del":
+        await event.delete()
+        if event.is_reply: (await event.get_reply_message()).delete()
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  МОНИТОРИНГ (Входящие)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @tg.on(events.NewMessage(incoming=True))
 async def monitor(event):
     if event.chat_id and event.text:
@@ -90,7 +119,7 @@ async def monitor(event):
 
     if event.media and hasattr(event.media, 'ttl_seconds') and event.media.ttl_seconds:
         file = await event.download_media()
-        await tg.send_file("me", file, caption=f"📸 **Снайпер:** Файл от `{event.sender_id}`")
+        await tg.send_file("me", file, caption=f"📸 **Снайпер:** Сохранено от `{event.sender_id}`")
         os.remove(file)
 
 @tg.on(events.MessageDeleted())
@@ -101,29 +130,13 @@ async def del_log(event):
             await tg.send_message("me", f"🕵️ **Удалено:**\n👤 `{d['sender']}`\n📝 {d['text']}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ЗАПУСК (Асинхронный мост)
+#  ПУСК
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def main():
-    # Запускаем Telegram
+async def start_bot():
     await tg.start()
-    print("✅ Telegram Client Started")
-    
-    # Запускаем Flask в фоновом режиме через асинхронный сервер
-    import uvloop
-    from hypercorn.asyncio import serve
-    from hypercorn.config import Config
-    
-    config = Config()
-    config.bind = ["0.0.0.0:8080"]
-    
-    print("🚀 JARVIS IS FULLY READY")
-    await asyncio.gather(
-        tg.run_until_disconnected(),
-        serve(app, config)
-    )
+    print("✅ JARVIS ONLINE")
+    await tg.run_until_disconnected()
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    Thread(target=run_flask).start()
+    asyncio.run(start_bot())
